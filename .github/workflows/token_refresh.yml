@@ -24,7 +24,7 @@ jobs:
       - name: Create credential files
         run: |
           echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
-          python3 -c "import json; token_data = ${{ secrets.GOOGLE_TOKEN }}; json.dump(token_data, open('token.json', 'w'))"
+          echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
           echo "NOTION_TOKEN=${{ secrets.NOTION_TOKEN }}" > .env
           echo "NOTION_DATABASE_ID=${{ secrets.NOTION_DATABASE_ID }}" >> .env
           echo "GOOGLE_TASKLIST_ID=${{ secrets.GOOGLE_TASKLIST_ID }}" >> .env
