@@ -2,7 +2,6 @@ import os
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Set
-from dotenv import load_dotenv
 from notion_client import Client
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -10,6 +9,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import json
+import asyncio
 import telegram
 from telegram.ext import Updater
 
@@ -17,66 +17,78 @@ from telegram.ext import Updater
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 환경 변수 로드
-load_dotenv()
+# GitHub Actions 시크릿 또는 환경 변수에서 값 가져오기
+NOTION_TOKEN = os.environ['NOTION_TOKEN']
+NOTION_DATABASE_ID = os.environ['NOTION_DATABASE_ID']
+GOOGLE_TASKLIST_ID = os.environ['GOOGLE_TASKLIST_ID']
+TELEGRAM_BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
+TELEGRAM_CHAT_ID = os.environ['TELEGRAM_CHAT_ID']
 
-NOTION_TOKEN = os.getenv('NOTION_TOKEN')
-NOTION_DATABASE_ID = os.getenv('NOTION_DATABASE_ID')
-GOOGLE_TASKLIST_ID = os.getenv('GOOGLE_TASKLIST_ID')
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+# Google OAuth 관련 시크릿
+GOOGLE_APPLICATION_CREDENTIALS = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+GOOGLE_CREDENTIALS = os.environ.get('GOOGLE_CREDENTIALS')
+GOOGLE_REFRESH_TOKEN = os.environ.get('GOOGLE_REFRESH_TOKEN')
+GOOGLE_TOKEN = os.environ.get('GOOGLE_TOKEN')
 
-def send_telegram_message(message):
-    """텔레그램으로 메시지를 전송합니다."""
+# credentials.json 파일 생성 (GitHub Actions 환경에서)
+def setup_google_credentials():
+    """GitHub Actions 환경에서 Google 인증 정보 설정"""
+    if GOOGLE_APPLICATION_CREDENTIALS:
+        with open('credentials.json', 'w') as f:
+            f.write(GOOGLE_APPLICATION_CREDENTIALS)
+        logger.info("credentials.json 파일이 생성되었습니다.")
+
+    if GOOGLE_TOKEN:
+        with open('token.json', 'w') as f:
+            f.write(GOOGLE_TOKEN)
+        logger.info("token.json 파일이 생성되었습니다.")
+
+async def send_telegram_message(message):
+    """텔레그램으로 메시지를 비동기적으로 전송합니다."""
     try:
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
+            async with telegram.Bot(token=TELEGRAM_BOT_TOKEN) as bot:
+                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
+                logger.info("텔레그램 메시지 전송 성공")
     except Exception as e:
         logger.error(f"텔레그램 메시지 전송 실패: {str(e)}")
-
-def should_refresh_token() -> bool:
-    """토큰을 갱신해야 하는지 확인합니다."""
-    try:
-        # token_refresh.json 파일에서 마지막 갱신 시간을 확인
-        if os.path.exists('token_refresh.json'):
-            with open('token_refresh.json', 'r') as f:
-                data = json.load(f)
-                last_refresh = datetime.fromisoformat(data['last_refresh'])
-                # 마지막 갱신으로부터 24시간이 지났는지 확인
-                return datetime.now() - last_refresh > timedelta(hours=24)
-        return True  # 파일이 없으면 갱신 필요
-    except Exception as e:
-        logger.error(f"토큰 갱신 시간 확인 중 오류 발생: {str(e)}")
-        return True  # 오류 발생 시 안전하게 갱신 진행
-
-def update_refresh_time():
-    """토큰 갱신 시간을 업데이트합니다."""
-    try:
-        with open('token_refresh.json', 'w') as f:
-            json.dump({
-                'last_refresh': datetime.now().isoformat()
-            }, f)
-    except Exception as e:
-        logger.error(f"토큰 갱신 시간 업데이트 중 오류 발생: {str(e)}")
 
 def get_google_credentials():
     """Google OAuth 인증 정보를 가져옵니다."""
     creds = None
     if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', ['https://www.googleapis.com/auth/tasks'])
+        try:
+            creds = Credentials.from_authorized_user_file('token.json', ['https://www.googleapis.com/auth/tasks'])
+        except Exception as e:
+            logger.error(f"토큰 파일 로드 중 오류 발생: {str(e)}")
+            return None
     
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            error_msg = "토큰이 만료되었습니다. 자동 갱신을 기다리거나 수동으로 갱신해주세요."
-            logger.error(error_msg)
-            send_telegram_message(f"⚠️ <b>Google 토큰 만료</b>\n\n{error_msg}")
-            raise Exception(error_msg)
+            try:
+                logger.info("토큰이 만료되어 갱신을 시도합니다.")
+                creds.refresh(Request())
+                # 갱신된 토큰 저장
+                with open('token.json', 'w') as token:
+                    token.write(creds.to_json())
+                logger.info("토큰이 성공적으로 갱신되었습니다.")
+                asyncio.run(send_telegram_message("🔄 <b>Google 토큰이 자동으로 갱신되었습니다.</b>"))
+            except Exception as e:
+                logger.error(f"토큰 갱신 중 오류 발생: {str(e)}")
+                asyncio.run(send_telegram_message(f"⚠️ <b>토큰 갱신 실패</b>\n\n{str(e)}"))
+                return None
         else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', ['https://www.googleapis.com/auth/tasks'])
-            creds = flow.run_local_server(port=0)
-            with open('token.json', 'w') as token:
-                token.write(creds.to_json())
+            try:
+                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', ['https://www.googleapis.com/auth/tasks'])
+                creds = flow.run_local_server(port=0)
+                with open('token.json', 'w') as token:
+                    token.write(creds.to_json())
+                logger.info("새로운 토큰이 생성되었습니다.")
+                asyncio.run(send_telegram_message("✨ <b>새로운 Google 토큰이 생성되었습니다.</b>"))
+            except Exception as e:
+                logger.error(f"새 토큰 생성 중 오류 발생: {str(e)}")
+                asyncio.run(send_telegram_message(f"⚠️ <b>새 토큰 생성 실패</b>\n\n{str(e)}"))
+                return None
     
     return creds
 
@@ -93,6 +105,8 @@ class NotionGoogleTasksSync:
     def _initialize_google_tasks(self) -> any:
         """Google Tasks API 인증 및 서비스 객체 생성"""
         creds = get_google_credentials()
+        if not creds:
+            raise Exception("Google 인증 정보를 가져올 수 없습니다.")
         return build('tasks', 'v1', credentials=creds)
 
     def _get_default_tasklist_id(self) -> str:
@@ -437,6 +451,9 @@ def main():
     }
 
     try:
+        # GitHub Actions 환경에서 인증 정보 설정
+        setup_google_credentials()
+        
         sync = NotionGoogleTasksSync()
         sync.sync_tasks()
 
@@ -453,11 +470,11 @@ def main():
                 message += f"- {error}\n"
 
         # 텔레그램으로 결과 전송
-        send_telegram_message(message)
+        asyncio.run(send_telegram_message(message))
 
     except Exception as e:
         error_message = f"❌ <b>동기화 중 오류 발생</b>\n\n{str(e)}"
-        send_telegram_message(error_message)
+        asyncio.run(send_telegram_message(error_message))
         logger.error(f"동기화 실패: {str(e)}")
         raise
 
