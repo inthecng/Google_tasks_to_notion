@@ -17,6 +17,9 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = "-1002695323680"  # 채널 ID
 
+# Google Tasks API 스코프 정의
+SCOPES = ['https://www.googleapis.com/auth/tasks.readonly']  # 기존 토큰과 동일한 스코프 사용
+
 def load_token():
     """Load the current token from token.json file"""
     try:
@@ -65,7 +68,7 @@ async def refresh_token():
             await send_telegram_message("⚠️ <b>토큰 데이터를 찾을 수 없습니다.</b>")
             return False
 
-        creds = Credentials.from_authorized_user_info(token_data, ['https://www.googleapis.com/auth/tasks'])
+        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
         
         if creds.refresh_token:
             try:
