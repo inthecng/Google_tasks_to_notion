@@ -1,11 +1,9 @@
 import os
 import json
-import time
 import logging
 import asyncio
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 import telegram
 
@@ -17,25 +15,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_CHAT_ID = "-1002695323680"  # 채널 ID 직접 지정
-
-async def send_telegram_message(message):
-    """텔레그램으로 메시지를 비동기적으로 전송합니다."""
-    if not TELEGRAM_BOT_TOKEN:
-        logger.warning("Telegram bot token not found. Skipping notification.")
-        return
-
-    try:
-        async with telegram.Bot(token=TELEGRAM_BOT_TOKEN) as bot:
-            await bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID,
-                text=message,
-                parse_mode='HTML',
-                disable_web_page_preview=True
-            )
-            logger.info("Telegram notification sent successfully")
-    except Exception as e:
-        logger.error(f"텔레그램 메시지 전송 실패: {str(e)}")
+TELEGRAM_CHAT_ID = "-1002695323680"  # 채널 ID
 
 def load_token():
     """Load the current token from token.json file"""
@@ -58,42 +38,38 @@ def save_token(token_data):
     except Exception as e:
         logger.error(f"Error saving token: {e}")
 
-def is_token_expired(token_data):
-    """Check if the token is expired or about to expire"""
-    if not token_data or 'expiry' not in token_data:
-        return True
-    
+async def send_telegram_message(message):
+    """텔레그램으로 메시지를 전송합니다."""
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("Telegram bot token not found. Skipping notification.")
+        return
+
     try:
-        # Add 5 minutes buffer before actual expiration
-        buffer_time = 300  # 5 minutes in seconds
-        expiry_timestamp = time.mktime(time.strptime(token_data['expiry'], '%Y-%m-%dT%H:%M:%S.%fZ'))
-        return time.time() + buffer_time >= expiry_timestamp
+        async with telegram.Bot(token=TELEGRAM_BOT_TOKEN) as bot:
+            await bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID,
+                text=message,
+                parse_mode='HTML',
+                disable_web_page_preview=True
+            )
+            logger.info("Telegram notification sent successfully")
     except Exception as e:
-        logger.error(f"Error checking token expiry: {e}")
-        return True
+        logger.error(f"텔레그램 메시지 전송 실패: {str(e)}")
 
 async def refresh_token():
-    """Refresh the Google Tasks API token"""
+    """Google Tasks API 토큰을 강제로 리프레시합니다."""
     try:
-        # Load existing token
         token_data = load_token()
         if not token_data:
             logger.error("No token data available to refresh")
             await send_telegram_message("⚠️ <b>토큰 데이터를 찾을 수 없습니다.</b>")
             return False
 
-        # Create credentials object
         creds = Credentials.from_authorized_user_info(token_data, ['https://www.googleapis.com/auth/tasks'])
-
-        # Check if token needs refresh
-        if is_token_expired(token_data) and creds.refresh_token:
-            logger.info("Token expired, attempting refresh...")
-            
+        
+        if creds.refresh_token:
             try:
-                # Perform token refresh
-                creds.refresh(None)
-                
-                # Save the refreshed token
+                creds.refresh(Request())
                 token_info = {
                     'token': creds.token,
                     'refresh_token': creds.refresh_token,
@@ -105,17 +81,18 @@ async def refresh_token():
                 }
                 save_token(token_info)
                 logger.info("Token successfully refreshed")
-                await send_telegram_message("🔄 <b>Google 토큰이 성공적으로 갱신되었습니다.</b>")
+                await send_telegram_message("🔄 <b>Google 토큰이 갱신되었습니다.</b>\n\n다음 만료 시간: " + token_info['expiry'])
                 return True
             except Exception as refresh_error:
                 error_message = f"토큰 갱신 중 오류 발생: {str(refresh_error)}"
                 logger.error(error_message)
                 await send_telegram_message(f"⚠️ <b>토큰 갱신 실패</b>\n\n{error_message}")
                 return False
-        
-        logger.info("Token is still valid, no refresh needed")
-        await send_telegram_message("ℹ️ <b>Google 토큰이 아직 유효합니다.</b>\n\n다음 만료 시간: {token_data['expiry']}")
-        return True
+        else:
+            error_message = "리프레시 토큰이 없습니다. 재인증이 필요합니다."
+            logger.error(error_message)
+            await send_telegram_message(f"⚠️ <b>토큰 갱신 실패</b>\n\n{error_message}")
+            return False
 
     except Exception as e:
         error_message = f"토큰 처리 중 예상치 못한 오류 발생: {str(e)}"
