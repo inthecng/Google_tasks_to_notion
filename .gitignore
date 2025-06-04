@@ -2,6 +2,8 @@
 credentials.json
 token.json
 token_refresh.json
+token.pickle
+*.pickle
 .env
 
 # Python
