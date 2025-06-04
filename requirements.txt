@@ -3,4 +3,4 @@ google-auth-httplib2==0.2.0
 google-auth-oauthlib>=0.4.6
 notion-client>=2.0.0
 python-dotenv>=0.19.0
-python-telegram-bot>=13.7 
+python-telegram-bot>=20.0 
